@@ -19,7 +19,7 @@ from datetime import datetime
 
 class CNNPepPred:
     def __init__(self,allele='no_allele_name',savePath=Path(os.getcwd()),doTraining=False,trainingData=None,trainingOutcome=None,doLogoSeq=False,doCV=False,cvPart=None,kFold=5,doApplyData=False,trainedModelsFile=None,applyData=None,applyDataName=None,epitopesLength=15,parametersFile='parameters.txt'):
-        self.__version__ = '0.0.1'
+        self.__version__ = '0.1.1'
         self.allele = allele.translate ({ord(c): "_" for c in "!@#$%^&*()[]{};:,./<>?\|`~-= +"})
         savePath = Path(savePath)
         if not os.path.isdir(savePath):
@@ -30,9 +30,12 @@ class CNNPepPred:
         self.epitopesLength = epitopesLength
         self.doApplyData = doApplyData
         self.doLogoSeq = doLogoSeq
+        if parametersFile!=None:
+            parametersFile = Path(parametersFile)
+            if os.path.exists(parametersFile):
+                self.parameters = pd.read_csv(parametersFile,index_col='Parameter_Name')
+                self.getParameters()
         if doTraining:
-            self.parameters = pd.read_csv(Path(parametersFile),index_col='Parameter_Name')
-            self.getParameters()
             if cvPart is None:
                 trainingData,trainingOutcome = sklearn.utils.shuffle(trainingData,trainingOutcome)
             self.trainingData = trainingData
@@ -46,7 +49,7 @@ class CNNPepPred:
             if doApplyData:
                 self.applyData = applyData
                 self.applyDataName = applyDataName
-        elif doApplyData or doLogoSeq:
+        if (not doTraining and (doApplyData or doLogoSeq)) or (trainedModelsFile is not None):
             if trainedModelsFile==None:
                 trainedModelsFile = Path(os.getcwd()) / 'trainedIEDBmodels' / ('model_'+self.allele)
             trainedModelsFile = Path(trainedModelsFile)
@@ -57,8 +60,14 @@ class CNNPepPred:
                 if ind_pkl.size==0:
                     netspath = trainedModelsFile / ('nets')
                     self.parameters = pd.read_csv(trainedModelsFile / 'parameters.txt',index_col='Parameter_Name')
+                    trainingDataModelFile = trainedModelsFile / "".join((trainedModelsFile.name.replace('model_','data_'),'.txt'))
+                    if os.path.exists(trainingDataModelFile):
+                        self.trainingDataModel = pd.read_csv(trainingDataModelFile,header=None).iloc[0:None,0].to_list()
                     valueColName = "Parameter_Value"
-                    self.maxL = int(self.parameters[valueColName]['maxL'])
+                    if isinstance(self.parameters[valueColName]['maxL'],pd.Series):
+                        self.maxL = int(self.parameters[valueColName]['maxL'].iloc[0]) #careful with repeated maxL in param file
+                    else:
+                        self.maxL = int(self.parameters[valueColName]['maxL'])
                     isNotFolder = False
                     parentFolder = trainedModelsFile
                 else:
@@ -72,8 +81,17 @@ class CNNPepPred:
                 self.timeTrain = trainedModelCNN.timeTrain
                 self.parameters = trainedModelCNN.parameters
                 parentFolder = trainedModelCNN.savePath
+                trainingDataModelFile = trainedModelsFile.savePath / "".join((trainedModelsFile.savePath.name.replace('model_','data_'),'.txt'))
+                if os.path.exists(trainingDataModelFile):
+                    self.trainingDataModel = pd.read_csv(trainingDataModelFile,header=None).iloc[0:None,0].to_list()
             elif isNotFolder:
-                 raise NameError("The given trained model does not have the correct format. It must either be .pkl saved model or a folder containing a parameter file and a folder with the trained nets.")   
+                 raise NameError("The given trained model does not have the correct format. It must either be .pkl saved model or a folder containing a parameter file and a folder with the trained nets.")
+            if parametersFile!=None:
+                valueColName = "Parameter_Value"
+                self.parameters[valueColName][['nbRandSeq','nbBest','lengthRandSeq','maxNbSamples2apply']] = [self.nbRandSeq,self.nbBest,self.lengthRandSeq,self.maxNbSamples2apply]
+                if doTraining:
+                    str_interval = lambda x: str(x).replace('[','').replace(']','').replace(', ','/')
+                    self.parameters[valueColName][['alpha','gamma','maxEpochs','miniBatchSize','activationFctDenseLayer','lossFct','initializeStd']] = [str_interval(self.alpha),str_interval(self.gamma),str_interval(self.maxEpochs),str_interval(self.miniBatchSize),self.activationFctDenseLayer,self.lossFct,self.initializeStd]
             self.getParameters()
             if not os.path.isdir(netspath):
                 raise NameError('There is no folder called "nets" with the trained nets in the location of the given model: \n %s' % parentFolder)
@@ -81,7 +99,7 @@ class CNNPepPred:
             if doApplyData:
                 self.applyData = applyData
                 self.applyDataName = applyDataName
-                if self.epitopesLength>self.maxL:
+                if self.epitopesLength!=None and self.epitopesLength>self.maxL:
                     raise NameError('The length of the epitopes (%i) is bigger than the maximal length of the model (%i)' %(self.epitopesLength,self.maxL))
             
     def getParameters(self):
@@ -147,15 +165,15 @@ class CNNPepPred:
         self.initializeStd = initializeStd
         alpha = params[valueColName]["alpha"]
         if alpha==alpha:
-            alpha = float(alpha)
+            alpha = [float(x) for x in alpha.split('/')]
         else:
-            alpha = 0.005
+            alpha = [0.005]
         self.alpha = alpha
         gamma = params[valueColName]["gamma"]
         if gamma==gamma:
-            gamma = float(gamma)
+            gamma = [float(x) for x in gamma.split('/')]
         else:
-            gamma = 0.9
+            gamma = [0.9]
         self.gamma = gamma
         l2_fact = params[valueColName]["l2_fact"]
         if l2_fact==l2_fact:
@@ -165,15 +183,15 @@ class CNNPepPred:
         self.l2_fact = l2_fact
         maxEpochs = params[valueColName]["maxEpochs"]
         if maxEpochs==maxEpochs:
-            maxEpochs = int(maxEpochs)
+            maxEpochs = [int(x) for x in maxEpochs.split('/')]
         else:
-            maxEpochs = 30
+            maxEpochs = [30]
         self.maxEpochs = maxEpochs
         miniBatchSize = params[valueColName]["miniBatchSize"]
         if miniBatchSize==miniBatchSize:
-            miniBatchSize = int(miniBatchSize)
+            miniBatchSize = [int(x) for x in miniBatchSize.split('/')]
         else:
-            miniBatchSize = 128
+            miniBatchSize = [128]
         self.miniBatchSize = miniBatchSize
         useBias = params[valueColName]["useBias"]
         if useBias==useBias:
@@ -244,8 +262,11 @@ class CNNPepPred:
             nMaxPool =np.max([6,maxL-l-l_most_freq+self.nbPrev+self.nbAfter+2])
         if saveOutput:
             self.seqL = seqL
-            self.maxL = maxL
-            self.nMaxPool = nMaxPool
+            if not hasattr(self,'maxL'):
+                self.maxL = maxL
+                self.nMaxPool = nMaxPool
+            elif self.maxL<maxL:
+                print('The class already has an attribute "maxL" and it is smaller than the new value to assign. Consequently, if further training is performed, some data with larger length might be ignored.')
         return seqL,maxL,nMaxPool
      
     def addEmptyPositions(self,sInt):
@@ -254,6 +275,18 @@ class CNNPepPred:
         nbPrev = self.nbPrev
         nbAfter = self.nbAfter
         seqL = seqL[0]
+        if np.any(seqL>maxL):
+            ind2keep = (seqL<=maxL).nonzero()[0]
+            n_rmv = np.sum(seqL>maxL)
+            seqL = seqL[ind2keep]
+            if hasattr(self,'trainingData') and len(self.trainingData)==len(sInt):
+                self.trainingData = [self.trainingData[i] for i in ind2keep]
+                if hasattr(self,'trainingOutcome'):
+                    self.trainingOutcome = self.trainingOutcome[ind2keep]
+                if hasattr(self,'cvPart'):
+                    self.cvPart = self.cvPart[ind2keep]
+            print('%i instances (out of %i) with length larger than the maximal length %i have been ignored.' % (n_rmv,len(sInt),maxL))
+            sInt = [sInt[i] for i in ind2keep]
         N = len(sInt)
         L = maxL+nbAfter
         intPrev =20*np.ones((1,nbPrev),dtype=int)[0]
@@ -296,15 +329,26 @@ class CNNPepPred:
         useBias = self.useBias
         lossFct = self.lossFct
         actFct = self.activationFctDenseLayer
+        do_transfer_learning = hasattr(self,'trainedModels')
         for i in np.arange(0,nbRep):
             model = Sequential()
-            model.add(Conv2D(F[i], kernel_size=(l,w),strides=(1,w), activation='relu',kernel_regularizer=l2(l2_fact),kernel_initializer=initializers.RandomNormal(stddev=initializeStd),bias_initializer=initializers.Zeros(),input_shape=(h,w,c),use_bias=useBias))
+            if do_transfer_learning:
+                layer_conv = self.trainedModels[i].layers[0]
+                layer_conv.trainable = False
+                model.add(layer_conv)
+            else:
+                model.add(Conv2D(F[i], kernel_size=(l,w),strides=(1,w), activation='relu',kernel_regularizer=l2(l2_fact),kernel_initializer=initializers.RandomNormal(stddev=initializeStd),bias_initializer=initializers.Zeros(),input_shape=(h,w,c),use_bias=useBias))
             model.add(MaxPooling2D(pool_size=(nMaxPool,1),strides=(1,1)))
             model.add(Flatten())
             model.add(Dense(1,activation=actFct,kernel_initializer=initializers.RandomNormal(stddev=initializeStd),bias_initializer=initializers.Zeros(),kernel_regularizer=l2(l2_fact),use_bias=useBias))
-            opt = optimizers.sgd(learning_rate=alpha,momentum=gamma)
+            opt = optimizers.sgd(learning_rate=alpha[0],momentum=gamma[0])
             model.compile(optimizer=opt, loss=lossFct)
-            model.fit(IM, out, epochs=maxEpochs,batch_size=miniBatchSize,verbose=0,shuffle=1,workers=1)
+            model.fit(IM, out, epochs=maxEpochs[0],batch_size=miniBatchSize[0],verbose=0,shuffle=1,workers=1)
+            if do_transfer_learning and maxEpochs[-1]>0:
+                layer_conv.trainable = True
+                opt = optimizers.sgd(learning_rate=alpha[-1],momentum=gamma[-1])
+                model.compile(optimizer=opt, loss=lossFct)
+                model.fit(IM, out, epochs=maxEpochs[-1],batch_size=miniBatchSize[-1],verbose=0,shuffle=1,workers=1)
             models.append(model)
         time_elapsed = (time.perf_counter() - time_start)
         if saveModel:
@@ -318,9 +362,16 @@ class CNNPepPred:
                 m.save(netPath / ('net%i' % i))
             index_name = self.parameters.index.name
             self.parameters.loc["nMaxPool"] = self.nMaxPool
-            self.parameters = self.parameters.append(pd.DataFrame({"Parameter_Value":self.maxL},index=("maxL",)))
+            if any(self.parameters.index=="maxL"):
+                self.parameters.loc["maxL"] = self.maxL
+            else:
+                self.parameters = self.parameters.append(pd.DataFrame({"Parameter_Value":self.maxL},index=("maxL",)))
             self.parameters.index.name = index_name
             self.parameters.to_csv(modelPath / 'parameters.txt',index_label = self.parameters.index.name)
+            data2save = self.trainingData
+            if hasattr(self,'trainingDataModel'):
+                data2save = data2save + self.trainingDataModel
+            pd.DataFrame(data2save).to_csv(modelPath / "".join(('data_',self.allele,'.txt')),index=None,header=None)
         return models
     
     def applyCNN(self,models,IM,saveOutcome=False):
@@ -329,7 +380,7 @@ class CNNPepPred:
         yhat = np.zeros((N,1)) 
         for i in np.arange(0,nbRep):
             yhat += models[i].predict(IM)
-        yhat = yhat/nbRep
+        yhat = yhat[:,0]/nbRep
         if saveOutcome:
             self.predictedOutcomeApply = yhat
         return yhat
@@ -339,13 +390,19 @@ class CNNPepPred:
         C = self.cvPart
         modelCV = []
         N = IM.shape[0]
-        yhatCV = np.zeros((N,1))
+        yhatCV = np.repeat(np.nan,N)
+        if hasattr(self,'trainingDataModel'):
+            trainingDataModel_lmer = self.int2aa(self.seq2Lmer(self.aa2int(self.trainingDataModel),L=self.l)[0])
+            ind2rmv = np.array([any(s2 in s1 for s2 in trainingDataModel_lmer) for s1 in self.trainingData]).nonzero()[0]
+        else:
+            ind2rmv = []
         for i,c in enumerate(np.unique(C)):
             print('Doing: fold %i \n' % i)
             indTest = np.where(C==c)[0]
+            indTest = np.setdiff1d(indTest,ind2rmv)
             indTrain = np.where(C!=c)[0]
             modelCVcurr = self.trainCNN(IM[indTrain,:,:,:], out[indTrain])
-            yhatCV[indTest,:] = self.applyCNN(modelCVcurr,IM[indTest,:,:,:])
+            yhatCV[indTest] = self.applyCNN(modelCVcurr,IM[indTest,:,:,:])
             modelCV.append(modelCVcurr)
             print('fold %i: Done \n' % i)
         time_elapsed = (time.perf_counter() - time_start)
@@ -464,16 +521,18 @@ class CNNPepPred:
         
     def getCVresults(self):
         yhatCV = self.predictedOutcomeCV
-        out = self.trainingOutcome
+        ind_no_nan = ~np.isnan(yhatCV)
+        out = self.trainingOutcome[ind_no_nan]
+        yhatCV = yhatCV[ind_no_nan]
         thr = self.bindingThr
         nbRound = 3
         outBin = out>thr
         yhatBin = yhatCV>thr
-        PC = np.corrcoef(yhatCV[:,0],out)[0,1].round(nbRound)
-        mse = sklearn.metrics.mean_squared_error(out, yhatCV[:,0])
+        PC = np.corrcoef(yhatCV,out)[0,1].round(nbRound)
+        mse = sklearn.metrics.mean_squared_error(out, yhatCV)
         rmse = np.array(math.sqrt(mse)).round(nbRound)
         if len(np.unique(outBin))>1:
-            AUC = np.array(sklearn.metrics.roc_auc_score(outBin,yhatCV[:,0])).round(nbRound)
+            AUC = np.array(sklearn.metrics.roc_auc_score(outBin,yhatCV)).round(nbRound)
             mcc = np.array(sklearn.metrics.matthews_corrcoef(outBin,yhatBin)).round(nbRound)
             acc = np.array(sklearn.metrics.accuracy_score(outBin,yhatBin)).round(nbRound)
             bacc = np.array(sklearn.metrics.balanced_accuracy_score(outBin,yhatBin)).round(nbRound)
